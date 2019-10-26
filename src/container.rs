@@ -1,11 +1,21 @@
 use crate::{Docker, Image, Logs};
-use std::env::var;
+use std::{
+    collections::HashMap,
+    env::var,
+    sync::RwLock,
+    thread::sleep,
+    time::{Duration, Instant},
+};
+
+const ONE_SECOND: Duration = Duration::from_secs(1);
+const ZERO: Duration = Duration::from_secs(0);
 
 pub struct Container<I>
 where
     I: Image,
 {
     id: String,
+    startup_timestamps: RwLock<HashMap<String, Instant>>,
     image: I,
 }
 
@@ -14,7 +24,12 @@ where
     I: Image,
 {
     pub fn new(id: String, image: I) -> Self {
-        let container = Container { id, image };
+        let container = Container {
+            id,
+            startup_timestamps: RwLock::default(),
+            image,
+        };
+        container.register_container_started();
         container.block_until_ready();
         container
     }
@@ -26,6 +41,7 @@ where
 
     /// Gives access to the log streams of this container.
     pub fn logs(&self) -> Logs {
+        self.wait_at_least_one_second_after_container_was_started();
         Docker::logs(&self.id)
     }
 
@@ -82,6 +98,42 @@ where
     fn rm(&self) {
         log::debug!("Deleting docker container {}", self.id);
         Docker::rm(&self.id)
+    }
+
+    fn register_container_started(&self) {
+        let mut lock_guard = match self.startup_timestamps.write() {
+            Ok(lock_guard) => lock_guard,
+            // We only need the mutex
+            // Data cannot be in-consistent even if a thread panics while holding the lock
+            Err(e) => e.into_inner(),
+        };
+        let start_timestamp = Instant::now();
+        log::trace!(
+            "Registering starting of container {} at {:?}",
+            self.id,
+            start_timestamp
+        );
+        lock_guard.insert(self.id.clone(), start_timestamp);
+    }
+
+    fn time_since_container_was_started(&self) -> Option<Duration> {
+        let lock_guard = match self.startup_timestamps.read() {
+            Ok(lock_guard) => lock_guard,
+            // We only need the mutex
+            // Data cannot be in-consistent even if a thread panics while holding the lock
+            Err(e) => e.into_inner(),
+        };
+        let result = lock_guard.get(&self.id).map(|i| Instant::now() - *i);
+        log::trace!("Time since container {} was started: {:?}", self.id, result);
+        result
+    }
+
+    fn wait_at_least_one_second_after_container_was_started(&self) {
+        if let Some(duration) = self.time_since_container_was_started() {
+            if duration < ONE_SECOND {
+                sleep(ONE_SECOND.checked_sub(duration).unwrap_or_else(|| ZERO))
+            }
+        }
     }
 }
 

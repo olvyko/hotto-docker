@@ -4,55 +4,7 @@ use std::{
     io::Read,
     io::{BufRead, BufReader},
     process::{Command, Stdio},
-    sync::RwLock,
-    thread::sleep,
-    time::{Duration, Instant},
 };
-
-use lazy_static::*;
-
-lazy_static! {
-    static ref CONTAINER_STARTUP_TIMESTAMPS: RwLock<HashMap<String, Instant>> = RwLock::default();
-}
-
-const ONE_SECOND: Duration = Duration::from_secs(1);
-const ZERO: Duration = Duration::from_secs(0);
-
-fn register_container_started(id: String) {
-    let mut lock_guard = match CONTAINER_STARTUP_TIMESTAMPS.write() {
-        Ok(lock_guard) => lock_guard,
-        // We only need the mutex
-        // Data cannot be in-consistent even if a thread panics while holding the lock
-        Err(e) => e.into_inner(),
-    };
-    let start_timestamp = Instant::now();
-    log::trace!(
-        "Registering starting of container {} at {:?}",
-        id,
-        start_timestamp
-    );
-    lock_guard.insert(id, start_timestamp);
-}
-
-fn time_since_container_was_started(id: &str) -> Option<Duration> {
-    let lock_guard = match CONTAINER_STARTUP_TIMESTAMPS.read() {
-        Ok(lock_guard) => lock_guard,
-        // We only need the mutex
-        // Data cannot be in-consistent even if a thread panics while holding the lock
-        Err(e) => e.into_inner(),
-    };
-    let result = lock_guard.get(id).map(|i| Instant::now() - *i);
-    log::trace!("Time since container {} was started: {:?}", id, result);
-    result
-}
-
-fn wait_at_least_one_second_after_container_was_started(id: &str) {
-    if let Some(duration) = time_since_container_was_started(id) {
-        if duration < ONE_SECOND {
-            sleep(ONE_SECOND.checked_sub(duration).unwrap_or_else(|| ZERO))
-        }
-    }
-}
 
 /// Implementation of the Docker client API using the docker cli.
 pub struct Docker;
@@ -95,13 +47,10 @@ impl Docker {
         let reader = BufReader::new(stdout);
         let container_id = reader.lines().next().unwrap().unwrap();
 
-        register_container_started(container_id.clone());
         Container::new(container_id, image)
     }
 
     pub fn logs(id: &str) -> Logs {
-        wait_at_least_one_second_after_container_was_started(id);
-
         let child = Command::new("docker")
             .arg("logs")
             .arg("-f")
