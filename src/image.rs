@@ -1,10 +1,12 @@
 use crate::{Container, WaitError, WaitForMessage};
+use async_trait::async_trait;
 use std::collections::HashMap;
 
 /// Represents a docker image.
-pub trait Image: Sized + Default {
+#[async_trait]
+pub trait Image: Sized + Clone + Default {
     fn descriptor(&self) -> String;
-    fn wait_until_ready(&self, container: &Container<Self>);
+    async fn wait_until_ready(&self, container: &Container<Self>);
     fn env_vars(&self) -> HashMap<String, String>;
     fn args(&self) -> Vec<String>;
     fn mounts(&self) -> Vec<HashMap<String, String>>;
@@ -39,17 +41,18 @@ impl WaitFor {
         }
     }
 
-    fn wait<I: Image>(&self, container: &Container<I>) -> Result<(), WaitError> {
+    async fn wait<I: Image>(&self, container: &Container<I>) -> Result<(), WaitError> {
         match self {
             WaitFor::Nothing => Ok(()),
             WaitFor::LogMessage { message, stream } => match stream {
-                Stream::StdOut => container.logs().stdout.wait_for_message(message),
-                Stream::StdErr => container.logs().stderr.wait_for_message(message),
+                Stream::StdOut => WaitForMessage::wait_for_message(container.stdout_stream(), message).await,
+                Stream::StdErr => WaitForMessage::wait_for_message(container.stderr_stream(), message).await,
             },
         }
     }
 }
 
+#[derive(Clone)]
 pub struct GenericImage {
     descriptor: String,
     env_vars: HashMap<String, String>,
@@ -105,13 +108,14 @@ impl GenericImage {
     }
 }
 
+#[async_trait]
 impl Image for GenericImage {
     fn descriptor(&self) -> String {
         self.descriptor.to_owned()
     }
 
-    fn wait_until_ready(&self, container: &Container<Self>) {
-        self.wait_for.wait(container).unwrap();
+    async fn wait_until_ready(&self, container: &Container<Self>) {
+        self.wait_for.wait(container).await.unwrap();
     }
 
     fn env_vars(&self) -> HashMap<String, String> {

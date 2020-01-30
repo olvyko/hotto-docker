@@ -1,13 +1,14 @@
 use crate::Ports as DockerPorts;
+use serde::Deserialize;
 use std::collections::HashMap;
 
-#[derive(serde::Deserialize, Debug)]
+#[derive(Deserialize, Debug)]
 struct NetworkSettings {
     #[serde(rename = "Ports")]
     ports: Ports,
 }
 
-#[derive(serde::Deserialize, Debug)]
+#[derive(Deserialize, Debug)]
 struct PortMapping {
     #[serde(rename = "HostIp")]
     ip: String,
@@ -15,7 +16,7 @@ struct PortMapping {
     port: String,
 }
 
-#[derive(serde::Deserialize, Debug)]
+#[derive(Deserialize, Debug)]
 pub struct ContainerInfo {
     #[serde(rename = "Id")]
     id: String,
@@ -29,7 +30,7 @@ impl ContainerInfo {
     }
 }
 
-#[derive(serde::Deserialize, Debug)]
+#[derive(Deserialize, Debug)]
 struct Ports(HashMap<String, Option<Vec<PortMapping>>>);
 
 impl Ports {

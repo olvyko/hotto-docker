@@ -1,4 +1,11 @@
-use std::io::{self, BufRead, BufReader, Read};
+use async_trait::async_trait;
+use futures_util::pin_mut;
+use std::process::Stdio;
+use tokio::{
+    io::{self, AsyncBufReadExt, AsyncRead, BufReader},
+    process::{Child, Command},
+    stream::{self, Stream, StreamExt},
+};
 
 /// Defines error cases when waiting for a message in a stream.
 #[derive(Debug)]
@@ -13,40 +20,23 @@ impl From<io::Error> for WaitError {
     }
 }
 
-/// Extension trait for io::Read to wait for a message to appear in the given stream.
-pub trait WaitForMessage {
-    fn wait_for_message(self, message: &str) -> Result<(), WaitError>;
-}
+pub struct WaitForMessage;
 
-impl<T> WaitForMessage for T
-where
-    T: Read,
-{
-    fn wait_for_message(self, message: &str) -> Result<(), WaitError> {
-        let logs = BufReader::new(self);
-
-        let mut iter = logs.lines().into_iter();
+impl WaitForMessage {
+    pub async fn wait_for_message<S: Stream<Item = String>>(stream: S, message: &str) -> Result<(), WaitError> {
+        pin_mut!(stream);
         let mut number_of_compared_lines = 0;
-
-        while let Some(line) = iter.next() {
-            let line = line?;
+        while let Some(line) = stream.next().await {
             number_of_compared_lines += 1;
-
             if line.contains(message) {
-                log::info!(
-                    "Found message after comparing {} lines",
-                    number_of_compared_lines
-                );
-
+                log::info!("Found message after comparing {} lines", number_of_compared_lines);
                 return Ok(());
             }
         }
-
         log::error!(
             "Failed to find message in stream after comparing {} lines.",
             number_of_compared_lines
         );
-
         Err(WaitError::EndOfStream)
     }
 }
