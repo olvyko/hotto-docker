@@ -1,12 +1,10 @@
-use crate::{Container, WaitError, WaitForMessage};
-use async_trait::async_trait;
 use std::collections::HashMap;
+use std::time::Duration;
 
 /// Represents a docker image.
-#[async_trait]
 pub trait Image: Sized + Clone + Default {
     fn descriptor(&self) -> String;
-    async fn wait_until_ready(&self, container: &Container<Self>);
+    fn wait_for(&self) -> WaitFor;
     fn env_vars(&self) -> HashMap<String, String>;
     fn args(&self) -> Vec<String>;
     fn mounts(&self) -> Vec<HashMap<String, String>>;
@@ -17,37 +15,33 @@ pub trait Image: Sized + Clone + Default {
 #[derive(Debug, PartialEq, Clone)]
 pub enum WaitFor {
     Nothing,
-    LogMessage { message: String, stream: Stream },
+    LogMessage {
+        message: String,
+        stream_type: StreamType,
+        wait_duration: Duration,
+    },
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub enum Stream {
+pub enum StreamType {
     StdOut,
     StdErr,
 }
 
 impl WaitFor {
-    pub fn message_on_stdout<S: Into<String>>(message: S) -> WaitFor {
+    pub fn message_on_stdout<S: Into<String>>(message: S, wait_duration: Duration) -> WaitFor {
         WaitFor::LogMessage {
             message: message.into(),
-            stream: Stream::StdOut,
+            stream_type: StreamType::StdOut,
+            wait_duration,
         }
     }
 
-    pub fn message_on_stderr<S: Into<String>>(message: S) -> WaitFor {
+    pub fn message_on_stderr<S: Into<String>>(message: S, wait_duration: Duration) -> WaitFor {
         WaitFor::LogMessage {
             message: message.into(),
-            stream: Stream::StdErr,
-        }
-    }
-
-    async fn wait<I: Image>(&self, container: &Container<I>) -> Result<(), WaitError> {
-        match self {
-            WaitFor::Nothing => Ok(()),
-            WaitFor::LogMessage { message, stream } => match stream {
-                Stream::StdOut => WaitForMessage::wait_for_message(container.stdout_stream(), message).await,
-                Stream::StdErr => WaitForMessage::wait_for_message(container.stderr_stream(), message).await,
-            },
+            stream_type: StreamType::StdErr,
+            wait_duration,
         }
     }
 }
@@ -108,14 +102,13 @@ impl GenericImage {
     }
 }
 
-#[async_trait]
 impl Image for GenericImage {
     fn descriptor(&self) -> String {
         self.descriptor.to_owned()
     }
 
-    async fn wait_until_ready(&self, container: &Container<Self>) {
-        self.wait_for.wait(container).await.unwrap();
+    fn wait_for(&self) -> WaitFor {
+        self.wait_for.clone()
     }
 
     fn env_vars(&self) -> HashMap<String, String> {

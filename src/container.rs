@@ -1,4 +1,4 @@
-use crate::{Docker, Image};
+use crate::{Docker, Image, StreamType, WaitError, WaitFor};
 use std::{
     collections::HashMap,
     env::var,
@@ -6,7 +6,6 @@ use std::{
     thread::sleep,
     time::{Duration, Instant},
 };
-use tokio::stream::Stream;
 
 const ONE_SECOND: Duration = Duration::from_secs(1);
 const ZERO: Duration = Duration::from_secs(0);
@@ -24,28 +23,20 @@ impl<I> Container<I>
 where
     I: Image,
 {
-    pub fn new(id: String, image: I) -> Self {
+    pub async fn new(id: String, image: I) -> Result<Self, WaitError> {
         let container = Container {
             id,
             startup_timestamps: RwLock::default(),
             image,
         };
         container.register_container_started();
-        container.block_until_ready();
-        container
+        container.block_until_ready().await?;
+        Ok(container)
     }
 
     /// Returns the id of this container.
     pub fn id(&self) -> &str {
         &self.id
-    }
-
-    pub fn stdout_stream(&self) -> impl Stream<Item = String> {
-        Docker::logs(&self.id).stdout_stream()
-    }
-
-    pub fn stderr_stream(&self) -> impl Stream<Item = String> {
-        Docker::logs(&self.id).stderr_stream()
     }
 
     pub async fn print_stdout(&self) {
@@ -56,6 +47,17 @@ where
     pub async fn print_stderr(&self) {
         self.wait_at_least_one_second_after_container_was_started();
         Docker::logs(&self.id).print_stderr().await;
+    }
+
+    pub fn run_background_logs_handle(&self) {
+        self.wait_at_least_one_second_after_container_was_started();
+        let id = self.id.clone();
+        std::thread::spawn(move || {
+            let future = async {
+                Docker::logs(&id).print_stdout().await;
+            };
+            block_on(future);
+        });
     }
 
     /// Returns the mapped host port for an internal port of this docker container.
@@ -91,10 +93,29 @@ where
         &self.image
     }
 
-    fn block_until_ready(&self) {
+    async fn block_until_ready(&self) -> Result<(), WaitError> {
         log::debug!("Waiting for container {} to be ready", self.id);
-        self.image.wait_until_ready(self);
+        match self.image.wait_for() {
+            WaitFor::LogMessage {
+                message,
+                stream_type,
+                wait_duration,
+            } => match stream_type {
+                StreamType::StdOut => {
+                    Docker::logs(&self.id)
+                        .wait_for_message_in_stdout(&message, wait_duration)
+                        .await?
+                }
+                StreamType::StdErr => {
+                    Docker::logs(&self.id)
+                        .wait_for_message_in_stderr(&message, wait_duration)
+                        .await?
+                }
+            },
+            WaitFor::Nothing => {}
+        }
         log::debug!("Container {} is now ready!", self.id);
+        Ok(())
     }
 
     fn stop(&self) {
