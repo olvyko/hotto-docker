@@ -30,19 +30,19 @@ pub enum StreamType {
 }
 
 impl WaitFor {
-    pub fn message_on_stdout<S: Into<String>>(message: S, wait_duration: Duration) -> WaitFor {
+    pub fn message_on_stdout<S: Into<String>>(message: S, wait_duration: u64) -> WaitFor {
         WaitFor::LogMessage {
             message: message.into(),
             stream_type: StreamType::StdOut,
-            wait_duration,
+            wait_duration: Duration::from_secs(wait_duration),
         }
     }
 
-    pub fn message_on_stderr<S: Into<String>>(message: S, wait_duration: Duration) -> WaitFor {
+    pub fn message_on_stderr<S: Into<String>>(message: S, wait_duration: u64) -> WaitFor {
         WaitFor::LogMessage {
             message: message.into(),
             stream_type: StreamType::StdErr,
-            wait_duration,
+            wait_duration: Duration::from_secs(wait_duration),
         }
     }
 }
