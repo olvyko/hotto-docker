@@ -1,4 +1,4 @@
-use crate::{Container, ContainerInfo, Image};
+use crate::{Container, ContainerInfo, Image, WaitError};
 use std::{
     cell::RefCell,
     collections::HashMap,
@@ -7,7 +7,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 use tokio::{
-    io::{self, AsyncBufReadExt, BufReader},
+    io::{AsyncBufReadExt, BufReader},
     process::Command,
     runtime::Runtime,
     stream::StreamExt,
@@ -63,20 +63,6 @@ impl RunCommand {
             let container = RunCommand::create_container(image).await?;
             Ok(container.with_tokio_runtime(self.tokio_runtime.clone()))
         })
-    }
-}
-
-/// Defines error cases when waiting for a message in a stream.
-#[derive(Debug)]
-pub enum WaitError {
-    EndOfStream,
-    WaitDurationExpired,
-    Io(io::Error),
-}
-
-impl From<io::Error> for WaitError {
-    fn from(e: io::Error) -> Self {
-        WaitError::Io(e)
     }
 }
 
