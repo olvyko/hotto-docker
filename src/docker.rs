@@ -16,6 +16,14 @@ impl Docker {
         }
     }
 
+    pub fn from_tokio_runtime(tokio_runtime: Rc<RefCell<Runtime>>) -> Self {
+        Self { tokio_runtime }
+    }
+
+    pub fn get_tokio_runtime(&self) -> Rc<RefCell<Runtime>> {
+        self.tokio_runtime.clone()
+    }
+
     /// Docker run command
     pub fn run(&self) -> RunCommand {
         RunCommand::new(self.tokio_runtime.clone())
