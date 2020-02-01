@@ -1,11 +1,14 @@
-use crate::{Docker, Image, StreamType, WaitError, WaitFor};
+use crate::{Image, InspectCommand, LogsCommand, RmCommand, StopCommand, StreamType, WaitError, WaitFor};
 use std::{
+    cell::RefCell,
     collections::HashMap,
     env::var,
+    rc::Rc,
     sync::RwLock,
     thread::sleep,
     time::{Duration, Instant},
 };
+use tokio::runtime::Runtime;
 
 const ONE_SECOND: Duration = Duration::from_secs(1);
 const ZERO: Duration = Duration::from_secs(0);
@@ -16,6 +19,7 @@ where
 {
     id: String,
     startup_timestamps: RwLock<HashMap<String, Instant>>,
+    tokio_runtime: Option<Rc<RefCell<Runtime>>>,
     image: I,
 }
 
@@ -28,10 +32,20 @@ where
             id,
             startup_timestamps: RwLock::default(),
             image,
+            tokio_runtime: None,
         };
         container.register_container_started();
         container.block_until_ready().await?;
         Ok(container)
+    }
+
+    pub fn with_tokio_runtime(mut self, tokio_runtime: Rc<RefCell<Runtime>>) -> Self {
+        self.tokio_runtime = Some(tokio_runtime);
+        self
+    }
+
+    pub(crate) fn is_tokio_runtime_was_set(&self) -> bool {
+        self.tokio_runtime.is_some()
     }
 
     /// Returns the id of this container.
@@ -41,23 +55,38 @@ where
 
     pub async fn print_stdout(&self) {
         self.wait_at_least_one_second_after_container_was_started();
-        Docker::logs(&self.id).print_stdout().await;
+        LogsCommand::print_stdout(&self.id).await;
     }
 
     pub async fn print_stderr(&self) {
         self.wait_at_least_one_second_after_container_was_started();
-        Docker::logs(&self.id).print_stderr().await;
+        LogsCommand::print_stderr(&self.id).await;
     }
 
-    pub fn run_background_logs_handle(&self) {
+    pub fn run_background_logs(&self, stdout: bool, stderr: bool) {
+        if !stdout && !stderr {
+            log::warn!("NOT Starting new thread for background logs");
+            return;
+        };
         self.wait_at_least_one_second_after_container_was_started();
         let id = self.id.clone();
+        log::warn!("Starting new thread for background logs of container {}", self.id);
         std::thread::spawn(move || {
-            let future = async {
-                Docker::logs(&id).print_stdout().await;
-            };
-            block_on(future);
+            let mut tokio_runtime = Runtime::new().expect("Unable to create tokio runtime");
+            tokio_runtime.block_on(async {
+                if stdout && stderr {
+                    tokio::join!(LogsCommand::print_stdout(&id), LogsCommand::print_stderr(&id));
+                } else if stdout {
+                    LogsCommand::print_stdout(&id).await;
+                } else if stderr {
+                    LogsCommand::print_stderr(&id).await;
+                }
+            });
         });
+    }
+
+    pub fn run_background_logs_all(&self) {
+        self.run_background_logs(true, true);
     }
 
     /// Returns the mapped host port for an internal port of this docker container.
@@ -66,9 +95,31 @@ where
     /// the already exposed ports. If a docker image does not expose a port, this method will not
     /// be able to resolve it.
     pub async fn get_host_port(&self, internal_port: u16) -> Option<u16> {
-        let resolved_port = Docker::inspect(&self.id)
-            .get_container_ports()
+        let resolved_port = InspectCommand::get_container_ports(&self.id)
             .await
+            .map_to_host_port(internal_port);
+
+        match resolved_port {
+            Some(port) => {
+                log::debug!("Resolved port {} to {} for container {}", internal_port, port, self.id);
+            }
+            None => {
+                log::warn!("Unable to resolve port {} for container {}", internal_port, self.id);
+            }
+        }
+        resolved_port
+    }
+
+    /// Blocking version of get_host_port func
+    pub fn get_host_port_blocking(&self, internal_port: u16) -> Option<u16> {
+        let inspect_command = InspectCommand::new(
+            self.tokio_runtime
+                .as_ref()
+                .expect("Unable to use blocking funcs, tokio runtime hasn't initialized")
+                .clone(),
+        );
+        let resolved_port = inspect_command
+            .get_container_ports_blocking(&self.id)
             .map_to_host_port(internal_port);
 
         match resolved_port {
@@ -102,14 +153,10 @@ where
                 wait_duration,
             } => match stream_type {
                 StreamType::StdOut => {
-                    Docker::logs(&self.id)
-                        .wait_for_message_in_stdout(&message, wait_duration)
-                        .await?
+                    LogsCommand::wait_for_message_in_stdout(&self.id, &message, wait_duration).await?
                 }
                 StreamType::StdErr => {
-                    Docker::logs(&self.id)
-                        .wait_for_message_in_stderr(&message, wait_duration)
-                        .await?
+                    LogsCommand::wait_for_message_in_stderr(&self.id, &message, wait_duration).await?
                 }
             },
             WaitFor::Nothing => {}
@@ -118,14 +165,32 @@ where
         Ok(())
     }
 
-    fn stop(&self) {
+    async fn stop(&self) {
         log::debug!("Stopping docker container {}", self.id);
-        block_on(Docker::stop(&self.id).stop_container());
+        StopCommand::stop_container(&self.id).await;
     }
 
-    fn rm(&self) {
+    fn stop_blocking(&mut self) {
+        log::debug!("Stopping docker container {}", self.id);
+        self.tokio_runtime
+            .as_ref()
+            .expect("Unable to use blocking funcs, tokio runtime hasn't initialized")
+            .borrow_mut()
+            .block_on(StopCommand::stop_container(&self.id));
+    }
+
+    async fn rm(&self) {
         log::debug!("Deleting docker container {}", self.id);
-        block_on(Docker::rm(&self.id).rm_container());
+        RmCommand::rm_container(&self.id).await;
+    }
+
+    fn rm_blocking(&mut self) {
+        log::debug!("Deleting docker container {}", self.id);
+        self.tokio_runtime
+            .as_ref()
+            .expect("Unable to use blocking funcs, tokio runtime hasn't initialized")
+            .borrow_mut()
+            .block_on(RmCommand::rm_container(&self.id));
     }
 
     fn register_container_started(&self) {
@@ -161,8 +226,6 @@ where
     }
 }
 
-use futures_executor::block_on;
-
 /// The destructor implementation for a Container.
 ///
 /// As soon as the container goes out of scope, the destructor will either only stop or delete the docker container.
@@ -178,8 +241,22 @@ where
             .unwrap_or(false);
 
         match keep_container {
-            true => self.stop(),
-            false => self.rm(),
+            true => {
+                if self.is_tokio_runtime_was_set() {
+                    self.stop_blocking();
+                } else {
+                    let mut tokio_runtime = Runtime::new().expect("Unable to create tokio runtime");
+                    tokio_runtime.block_on(self.stop());
+                }
+            }
+            false => {
+                if self.is_tokio_runtime_was_set() {
+                    self.rm_blocking();
+                } else {
+                    let mut tokio_runtime = Runtime::new().expect("Unable to create tokio runtime");
+                    tokio_runtime.block_on(self.rm());
+                }
+            }
         }
     }
 }

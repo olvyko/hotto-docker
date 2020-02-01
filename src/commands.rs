@@ -1,33 +1,37 @@
 use crate::{Container, ContainerInfo, Image};
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::process::Stdio;
-use std::time::{Duration, SystemTime};
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    process::Stdio,
+    rc::Rc,
+    time::{Duration, SystemTime},
+};
 use tokio::{
     io::{self, AsyncBufReadExt, BufReader},
     process::Command,
+    runtime::Runtime,
     stream::StreamExt,
 };
 
-pub struct RunCommand<I> {
-    image: I,
-    command: RefCell<Command>,
+pub struct RunCommand {
+    tokio_runtime: Rc<RefCell<Runtime>>,
 }
 
-impl<I: Image> RunCommand<I> {
-    pub fn new(image: I) -> Self {
-        let run = RunCommand::<I> {
-            image: image.clone(),
-            command: RefCell::new(Command::new("docker")),
-        };
-        run.command.borrow_mut().arg("run");
+impl RunCommand {
+    pub fn new(tokio_runtime: Rc<RefCell<Runtime>>) -> Self {
+        Self { tokio_runtime }
+    }
+
+    pub async fn create_container<I: Image>(image: I) -> Result<Container<I>, WaitError> {
+        let mut command = Command::new("docker");
+        command.arg("run");
         // Environment variables
         for (key, value) in image.env_vars() {
-            run.command.borrow_mut().arg("-e").arg(format!("{}={}", key, value));
+            command.arg("-e").arg(format!("{}={}", key, value));
         }
         // Mounts
         for value in image.mounts() {
-            run.command.borrow_mut().arg("--mount").arg(
+            command.arg("--mount").arg(
                 value
                     .iter()
                     .map(|(key, value)| format!("{}={}", key, value))
@@ -37,29 +41,28 @@ impl<I: Image> RunCommand<I> {
         }
         // Network
         if let Some(network) = image.network() {
-            run.command.borrow_mut().arg("--network").arg(network);
+            command.arg("--network").arg(network);
         }
-        run.command
-            .borrow_mut()
+        command
             .arg("-d") // Always run detached
             .arg("-P") // Always expose all ports
             .arg(image.descriptor())
             .args(image.args())
             .stdout(Stdio::piped());
-        run
-    }
 
-    pub async fn create_container(&self) -> Result<Container<I>, WaitError> {
-        log::debug!("Executing command: {:?}", self.command.borrow());
-        let child = self
-            .command
-            .borrow_mut()
-            .spawn()
-            .expect("Failed to execute docker run command");
+        log::debug!("Executing command: {:?}", command);
+        let child = command.spawn().expect("Failed to execute docker run command");
         let stdout = child.stdout.expect("failed to unwrap stdout docker run command");
         let reader = BufReader::new(stdout);
         let container_id = reader.lines().next().await.unwrap().unwrap();
-        Container::new(container_id, self.image.clone()).await
+        Container::new(container_id, image.clone()).await
+    }
+
+    pub fn create_container_blocking<I: Image>(&self, image: I) -> Result<Container<I>, WaitError> {
+        self.tokio_runtime.borrow_mut().block_on(async {
+            let container = RunCommand::create_container(image).await?;
+            Ok(container.with_tokio_runtime(self.tokio_runtime.clone()))
+        })
     }
 }
 
@@ -78,28 +81,25 @@ impl From<io::Error> for WaitError {
 }
 
 pub struct LogsCommand {
-    command: RefCell<Command>,
+    tokio_runtime: Rc<RefCell<Runtime>>,
 }
 
 impl LogsCommand {
-    pub fn new(container_id: &str) -> Self {
-        let logs = LogsCommand {
-            command: RefCell::new(Command::new("docker")),
-        };
-        logs.command
-            .borrow_mut()
+    pub fn new(tokio_runtime: Rc<RefCell<Runtime>>) -> Self {
+        Self { tokio_runtime }
+    }
+
+    pub async fn wait_for_message_in_stdout(
+        container_id: &str,
+        message: &str,
+        wait_duration: Duration,
+    ) -> Result<(), WaitError> {
+        let child = Command::new("docker")
             .arg("logs")
             .arg("-f")
             .arg(container_id)
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        logs
-    }
-
-    pub async fn wait_for_message_in_stdout(&self, message: &str, wait_duration: Duration) -> Result<(), WaitError> {
-        let child = self
-            .command
-            .borrow_mut()
+            .stderr(Stdio::piped())
             .spawn()
             .expect("failed to spawn docker logs command");
         let stdout = child.stdout.expect("failed to unwrap stdout docker logs command");
@@ -124,10 +124,32 @@ impl LogsCommand {
         Err(WaitError::EndOfStream)
     }
 
-    pub async fn wait_for_message_in_stderr(&self, message: &str, wait_duration: Duration) -> Result<(), WaitError> {
-        let child = self
-            .command
+    pub fn wait_for_message_in_stdout_blocking(
+        &self,
+        container_id: &str,
+        message: &str,
+        wait_duration: Duration,
+    ) -> Result<(), WaitError> {
+        self.tokio_runtime
             .borrow_mut()
+            .block_on(LogsCommand::wait_for_message_in_stdout(
+                container_id,
+                message,
+                wait_duration,
+            ))
+    }
+
+    pub async fn wait_for_message_in_stderr(
+        container_id: &str,
+        message: &str,
+        wait_duration: Duration,
+    ) -> Result<(), WaitError> {
+        let child = Command::new("docker")
+            .arg("logs")
+            .arg("-f")
+            .arg(container_id)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .spawn()
             .expect("failed to spawn docker logs command");
         let stderr = child.stderr.expect("failed to unwrap stderr docker logs command");
@@ -152,29 +174,54 @@ impl LogsCommand {
         Err(WaitError::EndOfStream)
     }
 
-    pub async fn print_stdout(&self) {
-        let child = self
-            .command
+    pub fn wait_for_message_in_stderr_blocking(
+        &self,
+        container_id: &str,
+        message: &str,
+        wait_duration: Duration,
+    ) -> Result<(), WaitError> {
+        self.tokio_runtime
             .borrow_mut()
+            .block_on(LogsCommand::wait_for_message_in_stderr(
+                container_id,
+                message,
+                wait_duration,
+            ))
+    }
+
+    pub async fn print_stdout(container_id: &str) {
+        let child = Command::new("docker")
+            .arg("logs")
+            .arg("-f")
+            .arg(container_id)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .spawn()
             .expect("failed to spawn docker logs command");
         let stdout = child.stdout.expect("failed to unwrap stdout docker logs command");
         let mut reader = BufReader::new(stdout).lines();
+        let mut short_container_id = container_id.to_owned();
+        short_container_id.truncate(6);
         while let Some(line) = reader.next_line().await.unwrap() {
-            println!("{}", line);
+            log::info!("stdout:{} > {}", short_container_id, line);
         }
     }
 
-    pub async fn print_stderr(&self) {
-        let child = self
-            .command
-            .borrow_mut()
+    pub async fn print_stderr(container_id: &str) {
+        let child = Command::new("docker")
+            .arg("logs")
+            .arg("-f")
+            .arg(container_id)
+            .stderr(Stdio::piped())
+            .stdout(Stdio::piped())
             .spawn()
             .expect("failed to spawn docker logs command");
         let stderr = child.stderr.expect("failed to unwrap stderr docker logs command");
         let mut reader = BufReader::new(stderr).lines();
+        let mut short_container_id = container_id.to_owned();
+        short_container_id.truncate(6);
         while let Some(line) = reader.next_line().await.unwrap() {
-            println!("{}", line);
+            log::error!("stderr:{} > {}", short_container_id, line);
         }
     }
 }
@@ -200,27 +247,19 @@ impl Ports {
 }
 
 pub struct InspectCommand {
-    command: RefCell<Command>,
+    tokio_runtime: Rc<RefCell<Runtime>>,
 }
 
 impl InspectCommand {
-    pub fn new(container_id: &str) -> Self {
-        let inspect = InspectCommand {
-            command: RefCell::new(Command::new("docker")),
-        };
-        inspect
-            .command
-            .borrow_mut()
-            .arg("inspect")
-            .arg(container_id)
-            .stdout(Stdio::piped());
-        inspect
+    pub fn new(tokio_runtime: Rc<RefCell<Runtime>>) -> Self {
+        Self { tokio_runtime }
     }
 
-    pub async fn get_container_info(&self) -> ContainerInfo {
-        let child = self
-            .command
-            .borrow_mut()
+    pub async fn get_container_info(container_id: &str) -> ContainerInfo {
+        let child = Command::new("docker")
+            .arg("inspect")
+            .arg(container_id)
+            .stdout(Stdio::piped())
             .spawn()
             .expect("failed to spawn docker inspect command");
         let stdout = child.stdout.expect("failed to unwrap stdout docker inspect command");
@@ -235,63 +274,73 @@ impl InspectCommand {
         info
     }
 
-    pub async fn get_container_ports(&self) -> Ports {
-        self.get_container_info().await.get_ports()
+    pub fn get_container_info_blocking(&self, container_id: &str) -> ContainerInfo {
+        self.tokio_runtime
+            .borrow_mut()
+            .block_on(InspectCommand::get_container_info(container_id))
+    }
+
+    pub async fn get_container_ports(container_id: &str) -> Ports {
+        InspectCommand::get_container_info(container_id).await.get_ports()
+    }
+
+    pub fn get_container_ports_blocking(&self, container_id: &str) -> Ports {
+        self.get_container_info_blocking(container_id).get_ports()
     }
 }
 
 pub struct RmCommand {
-    command: RefCell<Command>,
+    tokio_runtime: Rc<RefCell<Runtime>>,
 }
 
 impl RmCommand {
-    pub fn new(container_id: &str) -> Self {
-        let rm = RmCommand {
-            command: RefCell::new(Command::new("docker")),
-        };
-        rm.command
-            .borrow_mut()
+    pub fn new(tokio_runtime: Rc<RefCell<Runtime>>) -> Self {
+        Self { tokio_runtime }
+    }
+
+    #[allow(unused_must_use)]
+    pub async fn rm_container(container_id: &str) {
+        Command::new("docker")
             .arg("rm")
             .arg("-f")
             .arg("-v") // Also remove volumes
             .arg(container_id)
-            .stdout(Stdio::piped());
-        rm
-    }
-
-    pub async fn rm_container(&self) {
-        let _ = self
-            .command
-            .borrow_mut()
+            .stdout(Stdio::piped())
             .spawn()
             .expect("failed to spawn docker rm command")
             .await;
     }
+
+    pub fn rm_container_blocking(&self, container_id: &str) {
+        self.tokio_runtime
+            .borrow_mut()
+            .block_on(RmCommand::rm_container(container_id));
+    }
 }
 
 pub struct StopCommand {
-    command: RefCell<Command>,
+    tokio_runtime: Rc<RefCell<Runtime>>,
 }
 
 impl StopCommand {
-    pub fn new(container_id: &str) -> Self {
-        let stop = StopCommand {
-            command: RefCell::new(Command::new("docker")),
-        };
-        stop.command
-            .borrow_mut()
-            .arg("stop")
-            .arg(container_id)
-            .stdout(Stdio::piped());
-        stop
+    pub fn new(tokio_runtime: Rc<RefCell<Runtime>>) -> Self {
+        Self { tokio_runtime }
     }
 
-    pub async fn stop_container(&self) {
-        let _ = self
-            .command
-            .borrow_mut()
+    #[allow(unused_must_use)]
+    pub async fn stop_container(container_id: &str) {
+        Command::new("docker")
+            .arg("stop")
+            .arg(container_id)
+            .stdout(Stdio::piped())
             .spawn()
             .expect("failed to spawn docker stop command")
             .await;
+    }
+
+    pub fn stop_container_blocking(&self, container_id: &str) {
+        self.tokio_runtime
+            .borrow_mut()
+            .block_on(StopCommand::stop_container(container_id));
     }
 }

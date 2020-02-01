@@ -1,10 +1,11 @@
-use std::collections::HashMap;
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 
 /// Represents a docker image.
 pub trait Image: Sized + Clone + Default {
     fn descriptor(&self) -> String;
-    fn wait_for(&self) -> WaitFor;
+    fn wait_for(&self) -> WaitFor {
+        WaitFor::Nothing
+    }
     fn env_vars(&self) -> HashMap<String, String>;
     fn args(&self) -> Vec<String>;
     fn mounts(&self) -> Vec<HashMap<String, String>>;
