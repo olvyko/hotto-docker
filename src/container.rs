@@ -241,22 +241,8 @@ where
             .unwrap_or(false);
 
         match keep_container {
-            true => {
-                if self.is_tokio_runtime_was_set() {
-                    self.stop_blocking();
-                } else {
-                    let mut tokio_runtime = Runtime::new().expect("Unable to create tokio runtime");
-                    tokio_runtime.block_on(self.stop());
-                }
-            }
-            false => {
-                if self.is_tokio_runtime_was_set() {
-                    self.rm_blocking();
-                } else {
-                    let mut tokio_runtime = Runtime::new().expect("Unable to create tokio runtime");
-                    tokio_runtime.block_on(self.rm());
-                }
-            }
+            true => self.stop_blocking(),
+            false => self.rm_blocking(),
         }
     }
 }
