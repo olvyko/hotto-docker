@@ -115,7 +115,7 @@ where
         let inspect_command = InspectCommand::new(
             self.tokio_runtime
                 .as_ref()
-                .expect("Unable to use blocking funcs, tokio runtime hasn't initialized")
+                .expect("dockerust > unable to use get_host_port_blocking func, tokio runtime hasn't initialized")
                 .clone(),
         );
         let resolved_port = inspect_command
@@ -174,7 +174,7 @@ where
         log::debug!("Stopping docker container {}", self.id);
         self.tokio_runtime
             .as_ref()
-            .expect("Unable to use blocking funcs, tokio runtime hasn't initialized")
+            .expect("dockerust > unable to use stop_blocking func, tokio runtime hasn't initialized")
             .borrow_mut()
             .block_on(StopCommand::stop_container(&self.id));
     }
@@ -188,7 +188,7 @@ where
         log::debug!("Deleting docker container {}", self.id);
         self.tokio_runtime
             .as_ref()
-            .expect("Unable to use blocking funcs, tokio runtime hasn't initialized")
+            .expect("dockerust > unable to use rm_blocking func, tokio runtime hasn't initialized")
             .borrow_mut()
             .block_on(RmCommand::rm_container(&self.id));
     }

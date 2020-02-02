@@ -60,8 +60,9 @@ impl RunCommand {
 
     pub fn create_container_blocking<I: Image>(&self, image: I) -> Result<Container<I>, WaitError> {
         self.tokio_runtime.borrow_mut().block_on(async {
-            let container = RunCommand::create_container(image).await?;
-            Ok(container.with_tokio_runtime(self.tokio_runtime.clone()))
+            Ok(RunCommand::create_container(image)
+                .await?
+                .with_tokio_runtime(self.tokio_runtime.clone()))
         })
     }
 }
