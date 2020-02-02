@@ -1,4 +1,4 @@
-use crate::{ContainerInfo, Image, WaitError};
+use crate::{ContainerInfo, Image, StreamType, WaitError, WaitFor};
 use std::{collections::HashMap, process::Stdio, time::Duration};
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
@@ -147,6 +147,27 @@ impl LogsCommand {
             compared_lines
         );
         Err(WaitError::EndOfStream)
+    }
+
+    pub async fn wait_until_ready(container_id: &str, wait_for: WaitFor) -> Result<(), WaitError> {
+        log::debug!("Waiting for container {} to be ready", container_id);
+        match wait_for {
+            WaitFor::LogMessage {
+                message,
+                stream_type,
+                wait_duration,
+            } => match stream_type {
+                StreamType::StdOut => {
+                    LogsCommand::wait_for_message_in_stdout(container_id, &message, wait_duration).await?
+                }
+                StreamType::StdErr => {
+                    LogsCommand::wait_for_message_in_stderr(container_id, &message, wait_duration).await?
+                }
+            },
+            WaitFor::Nothing => {}
+        }
+        log::debug!("Container {} is now ready!", container_id);
+        Ok(())
     }
 
     pub async fn print_stdout(container_id: &str) {

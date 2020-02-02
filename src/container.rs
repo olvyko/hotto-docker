@@ -1,4 +1,4 @@
-use crate::{Image, InspectCommand, LogsCommand, RmCommand, RunCommand, StopCommand, StreamType, WaitError, WaitFor};
+use crate::{Image, InspectCommand, LogsCommand, RmCommand, RunCommand, StopCommand, WaitError};
 use std::time::{Duration, Instant};
 use tokio::runtime::{Builder, Runtime};
 
@@ -25,35 +25,19 @@ where
         let id = runtime.block_on(RunCommand::create_container(&image));
         let start_time = std::time::Instant::now();
         log::trace!("Registering starting of container {} at {:?}", id, start_time);
-        runtime.block_on(DockerContainer::block_until_ready(&id, &start_time, &image))?;
-        Ok(DockerContainer {
+        let mut container = DockerContainer {
             id,
             start_time,
             runtime,
             image,
-        })
-    }
-
-    async fn block_until_ready(container_id: &str, start_time: &Instant, image: &I) -> Result<(), WaitError> {
-        log::debug!("Waiting for container {} to be ready", container_id);
-        wait_at_least_one_second_after_container_was_started(container_id, start_time);
-        match image.wait_for() {
-            WaitFor::LogMessage {
-                message,
-                stream_type,
-                wait_duration,
-            } => match stream_type {
-                StreamType::StdOut => {
-                    LogsCommand::wait_for_message_in_stdout(container_id, &message, wait_duration).await?
-                }
-                StreamType::StdErr => {
-                    LogsCommand::wait_for_message_in_stderr(container_id, &message, wait_duration).await?
-                }
-            },
-            WaitFor::Nothing => {}
-        }
-        log::debug!("Container {} is now ready!", container_id);
-        Ok(())
+        };
+        wait_at_least_one_second_after_container_was_started(&container.id, &container.start_time);
+        container.runtime.block_on(LogsCommand::wait_until_ready(
+            &container.id,
+            container.image().wait_for(),
+        ))?;
+        // Ok(container)
+        Err(WaitError::EndOfStream)
     }
 
     pub fn id(&self) -> String {
@@ -153,7 +137,6 @@ where
             .ok()
             .and_then(|var| var.parse().ok())
             .unwrap_or(false);
-
         match keep_container {
             true => self.stop(),
             false => self.drop(),

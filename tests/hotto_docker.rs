@@ -1,4 +1,4 @@
-use dockerust::*;
+use hotto_docker::*;
 
 #[test]
 fn test_generic_image() {
