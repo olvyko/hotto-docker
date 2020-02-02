@@ -1,28 +1,19 @@
-use crate::{Container, ContainerInfo, Image, WaitError};
+use crate::{ContainerInfo, Image, WaitError};
 use std::{
-    cell::RefCell,
     collections::HashMap,
     process::Stdio,
-    rc::Rc,
     time::{Duration, SystemTime},
 };
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
     process::Command,
-    runtime::Runtime,
     stream::StreamExt,
 };
 
-pub struct RunCommand {
-    tokio_runtime: Rc<RefCell<Runtime>>,
-}
+pub struct RunCommand;
 
 impl RunCommand {
-    pub fn new(tokio_runtime: Rc<RefCell<Runtime>>) -> Self {
-        Self { tokio_runtime }
-    }
-
-    async fn docker_run<I: Image>(image: I) -> String {
+    pub async fn create_container<I: Image>(image: &I) -> String {
         let mut command = Command::new("docker");
         command.arg("run");
         // Environment variables
@@ -57,29 +48,11 @@ impl RunCommand {
         let container_id = reader.lines().next().await.unwrap().unwrap();
         container_id
     }
-
-    pub async fn create_container<I: Image>(image: I) -> Result<Container<I>, WaitError> {
-        let container_id = RunCommand::docker_run(image.clone()).await;
-        Container::new(container_id, image.clone(), None).await
-    }
-
-    pub fn create_container_blocking<I: Image>(&self, image: I) -> Result<Container<I>, WaitError> {
-        self.tokio_runtime.borrow_mut().block_on(async {
-            let container_id = RunCommand::docker_run(image.clone()).await;
-            Container::new(container_id, image.clone(), Some(self.tokio_runtime.clone())).await
-        })
-    }
 }
 
-pub struct LogsCommand {
-    tokio_runtime: Rc<RefCell<Runtime>>,
-}
+pub struct LogsCommand;
 
 impl LogsCommand {
-    pub fn new(tokio_runtime: Rc<RefCell<Runtime>>) -> Self {
-        Self { tokio_runtime }
-    }
-
     pub async fn wait_for_message_in_stdout(
         container_id: &str,
         message: &str,
@@ -115,21 +88,6 @@ impl LogsCommand {
         Err(WaitError::EndOfStream)
     }
 
-    pub fn wait_for_message_in_stdout_blocking(
-        &self,
-        container_id: &str,
-        message: &str,
-        wait_duration: Duration,
-    ) -> Result<(), WaitError> {
-        self.tokio_runtime
-            .borrow_mut()
-            .block_on(LogsCommand::wait_for_message_in_stdout(
-                container_id,
-                message,
-                wait_duration,
-            ))
-    }
-
     pub async fn wait_for_message_in_stderr(
         container_id: &str,
         message: &str,
@@ -163,21 +121,6 @@ impl LogsCommand {
             number_of_compared_lines
         );
         Err(WaitError::EndOfStream)
-    }
-
-    pub fn wait_for_message_in_stderr_blocking(
-        &self,
-        container_id: &str,
-        message: &str,
-        wait_duration: Duration,
-    ) -> Result<(), WaitError> {
-        self.tokio_runtime
-            .borrow_mut()
-            .block_on(LogsCommand::wait_for_message_in_stderr(
-                container_id,
-                message,
-                wait_duration,
-            ))
     }
 
     pub async fn print_stdout(container_id: &str) {
@@ -237,15 +180,9 @@ impl Ports {
     }
 }
 
-pub struct InspectCommand {
-    tokio_runtime: Rc<RefCell<Runtime>>,
-}
+pub struct InspectCommand;
 
 impl InspectCommand {
-    pub fn new(tokio_runtime: Rc<RefCell<Runtime>>) -> Self {
-        Self { tokio_runtime }
-    }
-
     pub async fn get_container_info(container_id: &str) -> ContainerInfo {
         let child = Command::new("docker")
             .arg("inspect")
@@ -265,30 +202,14 @@ impl InspectCommand {
         info
     }
 
-    pub fn get_container_info_blocking(&self, container_id: &str) -> ContainerInfo {
-        self.tokio_runtime
-            .borrow_mut()
-            .block_on(InspectCommand::get_container_info(container_id))
-    }
-
     pub async fn get_container_ports(container_id: &str) -> Ports {
         InspectCommand::get_container_info(container_id).await.get_ports()
     }
-
-    pub fn get_container_ports_blocking(&self, container_id: &str) -> Ports {
-        self.get_container_info_blocking(container_id).get_ports()
-    }
 }
 
-pub struct RmCommand {
-    tokio_runtime: Rc<RefCell<Runtime>>,
-}
+pub struct RmCommand;
 
 impl RmCommand {
-    pub fn new(tokio_runtime: Rc<RefCell<Runtime>>) -> Self {
-        Self { tokio_runtime }
-    }
-
     #[allow(unused_must_use)]
     pub async fn rm_container(container_id: &str) {
         Command::new("docker")
@@ -301,23 +222,11 @@ impl RmCommand {
             .expect("failed to spawn docker rm command")
             .await;
     }
-
-    pub fn rm_container_blocking(&self, container_id: &str) {
-        self.tokio_runtime
-            .borrow_mut()
-            .block_on(RmCommand::rm_container(container_id));
-    }
 }
 
-pub struct StopCommand {
-    tokio_runtime: Rc<RefCell<Runtime>>,
-}
+pub struct StopCommand;
 
 impl StopCommand {
-    pub fn new(tokio_runtime: Rc<RefCell<Runtime>>) -> Self {
-        Self { tokio_runtime }
-    }
-
     #[allow(unused_must_use)]
     pub async fn stop_container(container_id: &str) {
         Command::new("docker")
@@ -327,11 +236,5 @@ impl StopCommand {
             .spawn()
             .expect("failed to spawn docker stop command")
             .await;
-    }
-
-    pub fn stop_container_blocking(&self, container_id: &str) {
-        self.tokio_runtime
-            .borrow_mut()
-            .block_on(StopCommand::stop_container(container_id));
     }
 }

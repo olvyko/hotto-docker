@@ -16,7 +16,7 @@ fn test_generic_image() {
         .with_env_var("POSTGRES_USER", "user")
         .with_env_var("POSTGRES_PASSWORD", "pass");
 
-    let container = Docker::new().run().create_container_blocking(image).unwrap();
-    container.run_background_logs(false, true);
+    let container = DockerContainer::new(image).unwrap();
+    container.run_background_logs_stderr();
     std::thread::sleep(std::time::Duration::from_secs(10));
 }
