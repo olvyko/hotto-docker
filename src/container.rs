@@ -27,21 +27,16 @@ impl<I> Container<I>
 where
     I: Image,
 {
-    pub async fn new(id: String, image: I) -> Result<Self, WaitError> {
+    pub async fn new(id: String, image: I, tokio_runtime: Option<Rc<RefCell<Runtime>>>) -> Result<Self, WaitError> {
         let container = Container {
             id,
             startup_timestamps: RwLock::default(),
             image,
-            tokio_runtime: None,
+            tokio_runtime,
         };
         container.register_container_started();
         container.block_until_ready().await?;
         Ok(container)
-    }
-
-    pub fn with_tokio_runtime(mut self, tokio_runtime: Rc<RefCell<Runtime>>) -> Self {
-        self.tokio_runtime = Some(tokio_runtime);
-        self
     }
 
     pub(crate) fn is_tokio_runtime_was_set(&self) -> bool {
@@ -241,8 +236,24 @@ where
             .unwrap_or(false);
 
         match keep_container {
-            true => self.stop_blocking(),
-            false => self.rm_blocking(),
+            true => {
+                if self.is_tokio_runtime_was_set() {
+                    self.stop_blocking();
+                } else {
+                    // Todo: Fix creating new runtime ... AsyncDrop???
+                    let mut tokio_runtime = Runtime::new().expect("Unable to create tokio runtime");
+                    tokio_runtime.block_on(self.stop());
+                }
+            }
+            false => {
+                if self.is_tokio_runtime_was_set() {
+                    self.rm_blocking();
+                } else {
+                    // Todo: Fix creating new runtime ... AsyncDrop???
+                    let mut tokio_runtime = Runtime::new().expect("Unable to create tokio runtime");
+                    tokio_runtime.block_on(self.rm());
+                }
+            }
         }
     }
 }

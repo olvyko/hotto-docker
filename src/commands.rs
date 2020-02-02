@@ -22,7 +22,7 @@ impl RunCommand {
         Self { tokio_runtime }
     }
 
-    pub async fn create_container<I: Image>(image: I) -> Result<Container<I>, WaitError> {
+    async fn docker_run<I: Image>(image: I) -> String {
         let mut command = Command::new("docker");
         command.arg("run");
         // Environment variables
@@ -55,14 +55,18 @@ impl RunCommand {
         let stdout = child.stdout.expect("failed to unwrap stdout docker run command");
         let reader = BufReader::new(stdout);
         let container_id = reader.lines().next().await.unwrap().unwrap();
-        Container::new(container_id, image.clone()).await
+        container_id
+    }
+
+    pub async fn create_container<I: Image>(image: I) -> Result<Container<I>, WaitError> {
+        let container_id = RunCommand::docker_run(image.clone()).await;
+        Container::new(container_id, image.clone(), None).await
     }
 
     pub fn create_container_blocking<I: Image>(&self, image: I) -> Result<Container<I>, WaitError> {
         self.tokio_runtime.borrow_mut().block_on(async {
-            Ok(RunCommand::create_container(image)
-                .await?
-                .with_tokio_runtime(self.tokio_runtime.clone()))
+            let container_id = RunCommand::docker_run(image.clone()).await;
+            Container::new(container_id, image.clone(), Some(self.tokio_runtime.clone())).await
         })
     }
 }
