@@ -57,8 +57,7 @@ impl LogsCommand {
     ) -> Result<(), WaitError> {
         let child = Command::new("docker")
             .arg("logs")
-            .arg("--until")
-            .arg(format!("{}s", wait_duration))
+            .arg("-f")
             .arg(container_id)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -67,7 +66,6 @@ impl LogsCommand {
         let stdout = child.stdout.expect("failed to unwrap stdout docker logs command");
         let mut reader = BufReader::new(stdout).lines();
         let mut compared_lines = 0;
-
         loop {
             compared_lines += 1;
             match timeout(Duration::from_secs(wait_duration), reader.next_line()).await {
@@ -94,7 +92,6 @@ impl LogsCommand {
                 }
             }
         }
-
         log::error!(
             "Failed to find message in stream after comparing {} lines.",
             compared_lines
@@ -110,9 +107,6 @@ impl LogsCommand {
         let mut command = Command::new("docker");
         command
             .arg("logs")
-            //.arg(format!("--until={}s", wait_duration))
-            // .arg("--until")
-            // .arg(format!("{}s", wait_duration))
             .arg("-f")
             .arg(container_id)
             .stdout(Stdio::piped())
@@ -122,7 +116,6 @@ impl LogsCommand {
         let stderr = child.stderr.expect("failed to unwrap stderr docker logs command");
         let mut reader = BufReader::new(stderr).lines();
         let mut compared_lines = 0;
-
         loop {
             compared_lines += 1;
             match timeout(Duration::from_secs(wait_duration), reader.next_line()).await {
@@ -149,18 +142,6 @@ impl LogsCommand {
                 }
             }
         }
-
-        // while let Some(line) = reader.try_next().await.unwrap() {
-        //     number_of_compared_lines += 1;
-        //     if line.to_owned().contains(message) {
-        //         log::info!("Found message after comparing {} lines", number_of_compared_lines);
-        //         return Ok(());
-        //     };
-        //     // if SystemTime::now().duration_since(start_time).unwrap() >= wait_duration {
-        //     //     log::error!("Failed to find message in stream wait duration expired.");
-        //     //     return Err(WaitError::WaitDurationExpired);
-        //     // };
-        // }
         log::error!(
             "Failed to find message in stream after comparing {} lines.",
             compared_lines
