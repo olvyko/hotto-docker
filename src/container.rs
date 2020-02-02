@@ -36,8 +36,7 @@ where
             &container.id,
             container.image().wait_for(),
         ))?;
-        // Ok(container)
-        Err(WaitError::EndOfStream)
+        Ok(container)
     }
 
     pub fn id(&self) -> String {
