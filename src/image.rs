@@ -1,4 +1,4 @@
-use std::{collections::HashMap, time::Duration};
+use std::collections::HashMap;
 
 /// Represents a docker image.
 pub trait Image: Sized + Clone + Default {
@@ -19,7 +19,7 @@ pub enum WaitFor {
     LogMessage {
         message: String,
         stream_type: StreamType,
-        wait_duration: Duration,
+        wait_duration: u64,
     },
 }
 
@@ -34,7 +34,7 @@ impl WaitFor {
         WaitFor::LogMessage {
             message: message.into(),
             stream_type: StreamType::StdOut,
-            wait_duration: Duration::from_secs(wait_duration),
+            wait_duration,
         }
     }
 
@@ -42,7 +42,7 @@ impl WaitFor {
         WaitFor::LogMessage {
             message: message.into(),
             stream_type: StreamType::StdErr,
-            wait_duration: Duration::from_secs(wait_duration),
+            wait_duration,
         }
     }
 }

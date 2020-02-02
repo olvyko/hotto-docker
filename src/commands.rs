@@ -1,13 +1,10 @@
 use crate::{ContainerInfo, Image, WaitError};
-use std::{
-    collections::HashMap,
-    process::Stdio,
-    time::{Duration, SystemTime},
-};
+use std::{collections::HashMap, process::Stdio, time::Duration};
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
     process::Command,
     stream::StreamExt,
+    time::timeout,
 };
 
 pub struct RunCommand;
@@ -56,11 +53,12 @@ impl LogsCommand {
     pub async fn wait_for_message_in_stdout(
         container_id: &str,
         message: &str,
-        wait_duration: Duration,
+        wait_duration: u64,
     ) -> Result<(), WaitError> {
         let child = Command::new("docker")
             .arg("logs")
-            .arg("-f")
+            .arg("--until")
+            .arg(format!("{}s", wait_duration))
             .arg(container_id)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -68,22 +66,38 @@ impl LogsCommand {
             .expect("failed to spawn docker logs command");
         let stdout = child.stdout.expect("failed to unwrap stdout docker logs command");
         let mut reader = BufReader::new(stdout).lines();
-        let mut number_of_compared_lines = 0;
-        let start_time = SystemTime::now();
-        while let Some(line) = reader.next_line().await.unwrap() {
-            number_of_compared_lines += 1;
-            if line.contains(message) {
-                log::info!("Found message after comparing {} lines", number_of_compared_lines);
-                return Ok(());
-            };
-            if SystemTime::now().duration_since(start_time).unwrap() >= wait_duration {
-                log::error!("Failed to find message in stream wait duration expired.");
-                return Err(WaitError::WaitDurationExpired);
-            };
+        let mut compared_lines = 0;
+
+        loop {
+            compared_lines += 1;
+            match timeout(Duration::from_secs(wait_duration), reader.next_line()).await {
+                Ok(line) => match line {
+                    Ok(line) => match line {
+                        Some(line) => {
+                            if line.contains(message) {
+                                log::info!("Found message after comparing {} lines", compared_lines);
+                                return Ok(());
+                            } else {
+                                continue;
+                            }
+                        }
+                        None => break,
+                    },
+                    Err(err) => {
+                        log::error!("Failed to find message in stream, error: {:?}", err);
+                        return Err(WaitError::Io(err));
+                    }
+                },
+                Err(_) => {
+                    log::error!("Failed to find message in stream wait duration expired.");
+                    return Err(WaitError::WaitDurationExpired);
+                }
+            }
         }
+
         log::error!(
             "Failed to find message in stream after comparing {} lines.",
-            number_of_compared_lines
+            compared_lines
         );
         Err(WaitError::EndOfStream)
     }
@@ -91,34 +105,65 @@ impl LogsCommand {
     pub async fn wait_for_message_in_stderr(
         container_id: &str,
         message: &str,
-        wait_duration: Duration,
+        wait_duration: u64,
     ) -> Result<(), WaitError> {
-        let child = Command::new("docker")
+        let mut command = Command::new("docker");
+        command
             .arg("logs")
+            //.arg(format!("--until={}s", wait_duration))
+            // .arg("--until")
+            // .arg(format!("{}s", wait_duration))
             .arg("-f")
             .arg(container_id)
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("failed to spawn docker logs command");
+            .stderr(Stdio::piped());
+        log::debug!("Executing command: {:?}", command);
+        let child = command.spawn().expect("failed to spawn docker logs command");
         let stderr = child.stderr.expect("failed to unwrap stderr docker logs command");
         let mut reader = BufReader::new(stderr).lines();
-        let mut number_of_compared_lines = 0;
-        let start_time = SystemTime::now();
-        while let Some(line) = reader.next_line().await.unwrap() {
-            number_of_compared_lines += 1;
-            if line.contains(message) {
-                log::info!("Found message after comparing {} lines", number_of_compared_lines);
-                return Ok(());
-            };
-            if SystemTime::now().duration_since(start_time).unwrap() >= wait_duration {
-                log::error!("Failed to find message in stream wait duration expired.");
-                return Err(WaitError::WaitDurationExpired);
-            };
+        let mut compared_lines = 0;
+
+        loop {
+            compared_lines += 1;
+            match timeout(Duration::from_secs(wait_duration), reader.next_line()).await {
+                Ok(line) => match line {
+                    Ok(line) => match line {
+                        Some(line) => {
+                            if line.contains(message) {
+                                log::info!("Found message after comparing {} lines", compared_lines);
+                                return Ok(());
+                            } else {
+                                continue;
+                            }
+                        }
+                        None => break,
+                    },
+                    Err(err) => {
+                        log::error!("Failed to find message in stream, error: {:?}", err);
+                        return Err(WaitError::Io(err));
+                    }
+                },
+                Err(_) => {
+                    log::error!("Failed to find message in stream wait duration expired.");
+                    return Err(WaitError::WaitDurationExpired);
+                }
+            }
         }
+
+        // while let Some(line) = reader.try_next().await.unwrap() {
+        //     number_of_compared_lines += 1;
+        //     if line.to_owned().contains(message) {
+        //         log::info!("Found message after comparing {} lines", number_of_compared_lines);
+        //         return Ok(());
+        //     };
+        //     // if SystemTime::now().duration_since(start_time).unwrap() >= wait_duration {
+        //     //     log::error!("Failed to find message in stream wait duration expired.");
+        //     //     return Err(WaitError::WaitDurationExpired);
+        //     // };
+        // }
         log::error!(
             "Failed to find message in stream after comparing {} lines.",
-            number_of_compared_lines
+            compared_lines
         );
         Err(WaitError::EndOfStream)
     }
