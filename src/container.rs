@@ -25,7 +25,7 @@ where
         let id = runtime.block_on(RunCommand::create_container(&image));
         let start_time = std::time::Instant::now();
         log::trace!("Registering starting of container {} at {:?}", id, start_time);
-        runtime.block_on(DockerContainer::block_until_ready(&id, &image))?;
+        runtime.block_on(DockerContainer::block_until_ready(&id, &start_time, &image))?;
         Ok(DockerContainer {
             id,
             start_time,
@@ -34,8 +34,9 @@ where
         })
     }
 
-    async fn block_until_ready(container_id: &str, image: &I) -> Result<(), WaitError> {
+    async fn block_until_ready(container_id: &str, start_time: &Instant, image: &I) -> Result<(), WaitError> {
         log::debug!("Waiting for container {} to be ready", container_id);
+        wait_at_least_one_second_after_container_was_started(container_id, start_time);
         match image.wait_for() {
             WaitFor::LogMessage {
                 message,
@@ -55,19 +56,6 @@ where
         Ok(())
     }
 
-    fn time_since_container_was_started(&self) -> Duration {
-        let result = Instant::now() - self.start_time;
-        log::trace!("Time since container {} was started: {:?}", self.id, result);
-        result
-    }
-
-    fn wait_at_least_one_second_after_container_was_started(&self) {
-        let duration = self.time_since_container_was_started();
-        if duration < ONE_SECOND {
-            std::thread::sleep(ONE_SECOND.checked_sub(duration).unwrap_or_else(|| ZERO))
-        }
-    }
-
     pub fn id(&self) -> String {
         self.id.clone()
     }
@@ -77,17 +65,17 @@ where
     }
 
     pub fn print_stdout(&mut self) {
-        self.wait_at_least_one_second_after_container_was_started();
+        wait_at_least_one_second_after_container_was_started(&self.id, &self.start_time);
         self.runtime.block_on(LogsCommand::print_stdout(&self.id));
     }
 
     pub fn print_stderr(&mut self) {
-        self.wait_at_least_one_second_after_container_was_started();
+        wait_at_least_one_second_after_container_was_started(&self.id, &self.start_time);
         self.runtime.block_on(LogsCommand::print_stderr(&self.id));
     }
 
     fn run_background_logs(&self, stdout: bool, stderr: bool) {
-        self.wait_at_least_one_second_after_container_was_started();
+        wait_at_least_one_second_after_container_was_started(&self.id, &self.start_time);
         let id = self.id.clone();
         log::warn!("Starting new thread for background logs of container {}", self.id);
         std::thread::spawn(move || {
@@ -141,6 +129,14 @@ where
     fn drop(&mut self) {
         log::debug!("Droping docker container {}", self.id);
         self.runtime.block_on(RmCommand::rm_container(&self.id));
+    }
+}
+
+fn wait_at_least_one_second_after_container_was_started(container_id: &str, start_time: &Instant) {
+    let duration = Instant::now() - *start_time;
+    log::trace!("Time since container {} was started: {:?}", container_id, duration);
+    if duration < ONE_SECOND {
+        std::thread::sleep(ONE_SECOND.checked_sub(duration).unwrap_or_else(|| ZERO))
     }
 }
 
