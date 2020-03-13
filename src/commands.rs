@@ -1,5 +1,5 @@
 use crate::{ContainerInfo, Image, StreamType, WaitError, WaitFor};
-use std::{collections::HashMap, process::Stdio, time::Duration};
+use std::{collections::HashMap, process::Command as StdCommand, process::Stdio, time::Duration};
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
     process::Command,
@@ -257,31 +257,27 @@ impl InspectCommand {
 pub struct RmCommand;
 
 impl RmCommand {
-    #[allow(unused_must_use)]
-    pub async fn rm_container(container_id: &str) {
-        Command::new("docker")
+    pub fn rm_container(container_id: &str) {
+        StdCommand::new("docker")
             .arg("rm")
             .arg("-f")
             .arg("-v") // Also remove volumes
             .arg(container_id)
             .stdout(Stdio::piped())
-            .spawn()
-            .expect("failed to spawn docker rm command")
-            .await;
+            .status()
+            .expect("failed to run docker rm command");
     }
 }
 
 pub struct StopCommand;
 
 impl StopCommand {
-    #[allow(unused_must_use)]
-    pub async fn stop_container(container_id: &str) {
-        Command::new("docker")
+    pub fn stop_container(container_id: &str) {
+        StdCommand::new("docker")
             .arg("stop")
             .arg(container_id)
             .stdout(Stdio::piped())
-            .spawn()
-            .expect("failed to spawn docker stop command")
-            .await;
+            .status()
+            .expect("failed to run docker stop command");
     }
 }

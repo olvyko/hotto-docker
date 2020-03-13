@@ -1,7 +1,7 @@
 use hotto_docker::*;
 
-#[test]
-fn test_generic_image() {
+#[tokio::test]
+async fn test_generic_image() {
     pretty_env_logger::formatted_builder()
         .filter_level(log::LevelFilter::Debug)
         .try_init()
@@ -16,7 +16,7 @@ fn test_generic_image() {
         .with_env_var("POSTGRES_USER", "user")
         .with_env_var("POSTGRES_PASSWORD", "pass");
 
-    let container = DockerContainer::new(image).unwrap();
-    container.run_background_logs_stderr();
-    std::thread::sleep(std::time::Duration::from_secs(10));
+    let container = DockerContainer::new(image).await.unwrap();
+    container.run_background_logs_stderr().await;
+    tokio::time::delay_for(std::time::Duration::from_secs(10)).await;
 }
